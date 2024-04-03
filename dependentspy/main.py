@@ -8,11 +8,11 @@ import networkx as nx
 from dependentspy.utils import PathLike, find_dead_ends
 from dependentspy.visualization import create_graphviz
 from dependentspy.module import Module, ProjectModule, complete_module_tree
+from dependentspy.version import __version__
 
 
 __tool_name__ = "dependentspy"
 __tool_url__ = "https://github.com/raihensen/dependentspy"
-__version__ = "0.1.0"
 
 
 def dependentspy(
