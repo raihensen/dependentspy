@@ -1,41 +1,12 @@
-from functools import cached_property
-import sys
 import os
 from pathlib import Path
-from collections import Counter
-import ast
-from typing import Literal, Sequence, TypeVar
+from typing import Literal, Sequence
 import warnings
 
 import networkx as nx
 import graphviz as gv
 
-
-def analyze_imports(file_path: Path):
-    """Analyze a Python file to extract import statements."""
-    with open(file_path, "r", encoding="utf-8") as source_file:
-        source_code = source_file.read()
-
-    tree = ast.parse(source_code, filename=file_path)
-
-    # Extract top-level import statements
-    imports = [
-        node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))
-    ]
-
-    return imports
-
-
-def extract_module_names(import_nodes: list[ast.Import | ast.ImportFrom]) -> list[str]:
-    """Extract module names from import nodes."""
-    module_names = []
-    for node in import_nodes:
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                module_names.append(alias.name)
-        elif isinstance(node, ast.ImportFrom):
-            module_names.append(node.module)
-    return module_names
+from module import Module, ProjectModule
 
 
 def module_type_node_attrs(module_type: str):
@@ -46,89 +17,6 @@ def module_type_node_attrs(module_type: str):
     if module_type == "project":
         return {"fillcolor": "#e0e0e0", "style": "filled"}
     raise ValueError
-
-
-class Module:
-    def __init__(self, path: str | Sequence[str]):
-        if isinstance(path, str):
-            self.path = tuple(path.split("."))
-        elif isinstance(path, list):
-            self.path = tuple(path)
-        elif isinstance(path, tuple):
-            self.path = path
-        del path
-
-        self.route = ".".join(self.path)
-        self.name = self.path[-1]
-        self.root = self.path[0]
-
-        self.parent: Module | None = None
-        self.children: list[Module] = []
-
-    @property
-    def is_project(self):
-        return isinstance(self, ProjectModule)
-
-    @cached_property
-    def is_builtin(self):
-        root = self.path[0]
-        return root in sys.stdlib_module_names or root in sys.builtin_module_names
-
-    @property
-    def is_3rdparty(self):
-        return not self.is_project and not self.is_builtin
-
-    @cached_property
-    def type(self):
-        if self.is_project:
-            return "project"
-        if self.is_builtin:
-            return "builtin"
-        return "3rdparty"
-
-    def __str__(self):
-        if self.is_project:
-            return self.route
-        return f"{self.route} ({self.type})"
-
-    def __repr__(self):
-        return str(self)
-
-    def is_root(self):
-        return self.parent is None
-
-    def is_leaf(self):
-        return not self.children
-
-    def get_root(self):
-        if self.parent is None:
-            return self
-        return self.parent.get_root()
-
-
-class ProjectModule(Module):
-
-    def __init__(
-        self,
-        path: str | Sequence[str],
-        file_path: Path | None = None,
-    ):
-        super().__init__(path=path)
-        self.file_path = file_path
-        self.imports: list[Module] = []
-
-    @staticmethod
-    def from_file(file_path: Path):
-        assert file_path.suffix == ".py"
-        path = (*file_path.parts[:-1], file_path.stem)
-        return ProjectModule(file_path=file_path, path=path)
-
-    @cached_property
-    def import_routes(self) -> list[str] | None:
-        if not self.file_path:
-            return None
-        imports = analyze_imports(self.file_path)
-        return extract_module_names(imports)
 
 
 def complete_module_tree(modules: Sequence[Module], cls: type[Module]) -> list[Module]:
@@ -178,7 +66,7 @@ def find_dead_ends(gr: nx.DiGraph):
     return C
 
 
-def build_dependency_graph(
+def dependentspy(
     project_root,
     *,
     name: str = "dependency_graph",
@@ -194,7 +82,7 @@ def build_dependency_graph(
     use_nested_clusters: bool = True,
     min_cluster_size: int = 2,
     ignore: list[str] = [],
-    exclude: list[str] = [],
+    hide: list[str] = [],
     **kwargs,
 ):
     """Build a graph representing internal dependencies of the project."""
@@ -262,15 +150,17 @@ def build_dependency_graph(
             m.route for m in project_modules if m.is_leaf() and in_degrees[m.route] == 0
         ]
         no_imports = [
-            m.route for m in project_modules if m.is_leaf() and out_degrees[m.route] == 0
+            m.route
+            for m in project_modules
+            if m.is_leaf() and out_degrees[m.route] == 0
         ]
         dead_ends = [r for r in find_dead_ends(gr)]
-        
+
         print("Never imported:", len(never_imported))
         print("No imports:", len(no_imports))
         print("dead ends:", len(dead_ends))
 
-        exclude += never_imported + no_imports
+        hide += never_imported + no_imports
 
     # Determine what modules are displayed as clusters/subgraphs
     cluster_names = {}
@@ -283,7 +173,7 @@ def build_dependency_graph(
                 continue
             if len(module.children) < min_cluster_size:
                 continue
-            if module.route in exclude:
+            if module.route in hide:
                 continue
             cluster_names[module.route] = f"cluster[{module.route}]"
 
@@ -307,7 +197,7 @@ def build_dependency_graph(
             continue
         if not show_3rdparty and module.is_3rdparty:
             continue
-        if module.route in exclude:
+        if module.route in hide:
             continue
 
         # Merge external module paths to root module name
@@ -334,10 +224,12 @@ def build_dependency_graph(
 
     if not output_to_project:
         os.chdir(cwd)
-    
+
     if render == "if_changed":
         if not save_dot:
-            warnings.warn("save_dot=False while render='if_changed'. This seems accidental.")
+            warnings.warn(
+                "save_dot=False while render='if_changed'. This seems accidental."
+            )
         render = True
         if os.path.exists(G.filepath):
             prev = open(G.filepath).read()
@@ -375,7 +267,7 @@ def create_graphviz(
         H = gv.Digraph(name=cluster_name)
         H.attr(label=module.route)
         subgraphs[module.route] = H
-    
+
     def get_containing_graph(module: Module):
         cluster_route = cluster_map.get(module.route, None)
         return subgraphs[cluster_route] if cluster_route else G
@@ -410,7 +302,7 @@ def create_graphviz(
         module = route_map[route]
         H0 = get_containing_graph(module.parent) if module.parent else G
         H0.subgraph(H)
-    
+
     # Add import edges
     if render_imports:
         for module in visible_modules:
@@ -440,7 +332,7 @@ def create_graphviz(
 
 
 if __name__ == "__main__":
-    G = build_dependency_graph(
+    G = dependentspy(
         "../../ocean/backend",
         render_imports=True,
         prune=True,
@@ -451,10 +343,10 @@ if __name__ == "__main__":
         show_builtin=False,
         summarize_external=True,
         ignore=["drafts*"],
-        exclude=["main", "index"],
+        hide=["main", "index"],
         output_to_project=True,
         save_dot=True,
         render="if_changed",
         format="png",
     )
-    G.view()
+G.view()
