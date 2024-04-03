@@ -1,75 +1,24 @@
 import os
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Literal
 import warnings
 
 import networkx as nx
-import graphviz as gv
 
-from module import Module, ProjectModule
-
-
-def module_type_node_attrs(module_type: str):
-    if module_type == "stdlib" or module_type == "builtin":
-        return {"fillcolor": "lightblue", "style": "filled"}
-    if module_type == "3rdparty":
-        return {"fillcolor": "black", "fontcolor": "white", "style": "filled"}
-    if module_type == "project":
-        return {"fillcolor": "#e0e0e0", "style": "filled"}
-    raise ValueError
+from utils import PathLike, find_dead_ends
+from visualization import create_graphviz
+from module import Module, ProjectModule, complete_module_tree
 
 
-def complete_module_tree(modules: Sequence[Module], cls: type[Module]) -> list[Module]:
-    route_map = {m.route: m for m in modules}
-
-    # Complete tree structure
-    inner_modules = []
-    for m in modules:
-        child = m
-        for i in reversed(range(1, len(m.path))):
-            subpath = m.path[:i]
-            subroute = ".".join(subpath)
-            existing = subroute in route_map
-            if existing:
-                parent = route_map[subroute]
-            else:
-                parent = cls(path=subpath)
-                route_map[subroute] = parent
-            parent.children.append(child)
-            child.parent = parent
-            if existing:
-                break
-
-            inner_modules.append(parent)
-            child = parent
-
-    return list(modules) + inner_modules
-
-
-def find_dead_ends(gr: nx.DiGraph):
-    out_degrees = {v: gr.out_degree(v) for v in gr.nodes}
-    no_out = {v for v, d in out_degrees.items() if d == 0}
-    # in_degrees = {v: gr.in_degree(v) for v in gr.nodes}
-    # no_in = {v for v, d in in_degrees.items() if d == 0}
-    C = {*no_out}
-    prev = {*C}
-    while prev:
-        new = set()
-        for u in prev:
-            for v in gr.predecessors(u):
-                if v in C:
-                    continue
-                if set(gr.successors(v)) <= C:
-                    new.add(v)
-                    C.add(v)
-        prev = new
-    return C
+__tool_name__ = "dependentspy"
+__tool_url__ = "https://github.com/raihensen/dependentspy"
+__version__ = "0.1.0"
 
 
 def dependentspy(
-    project_root,
+    project_root: PathLike,
     *,
-    name: str = "dependency_graph",
+    name: str = "dependentspy_graph",
     save_dot: bool = True,
     render: bool | Literal["if_changed"] = "if_changed",
     output_to_project: bool = False,
@@ -83,11 +32,36 @@ def dependentspy(
     min_cluster_size: int = 2,
     ignore: list[str] = [],
     hide: list[str] = [],
+    comment: str | None = None,
     **kwargs,
 ):
-    """Build a graph representing internal dependencies of the project."""
-    use_nested_clusters = use_clusters and use_nested_clusters
+    """Main `dependentspy` function, walking the given project directory and creating a dependency graph using graphviz.
 
+    Arguments:
+    - project_root: The path of the project to analyze.
+
+    Keyword arguments:
+    - name: A name that will be given to the output files and the graph, defaults to `"dependentspy_graph"`
+    - save_dot: Whether to save the dot string to a file. Defaults to `True`.
+    - render: Whether to save the rendered graph. If "if_changed", only saves if the dot string has changed, should only be used when save_dot is True. defaults to `"if_changed"`.
+    - output_to_project: Whether to save the output to the project directory. If False, saves to the current working directory. defaults to `False`.
+    - prune: Whether to remove modules that are either never imported, or have no imports themselves. Can increase readability. defaults to `False`.
+    - render_imports: Whether to render imports as edges. If False, just shows the project structure as nodes without edges. defaults to `True`.
+    - show_3rdparty: Whether to show third-party modules. Defaults to `True`.
+    - show_builtin: Whether to show stdlib / built-in modules. Defaults to `False`.
+    - summarize_external: Whether to summarize external modules and their submodules when both are imported. Defaults to `True`.
+    - use_clusters: Whether to group submodules of the same module and render them as a bordered subgraph. Defaults to `True`.
+    - use_nested_clusters: Whether to use nested clusters for grouping nested submodules. Defaults to `True`.
+    - min_cluster_size: Minimum number of submodules in the same module to make it a cluster. Defaults to `2`.
+    - ignore: A list of path patterns (similar to .gitignore) for python files to ignore.
+    - hide: A list of modules to hide in the graph
+    - comment: Optional comment added to the first line of the source
+    """
+
+    # Process parameters
+    use_nested_clusters = use_clusters and use_nested_clusters
+    comment = ((comment + " -- ") if comment else "") + f"Created using {__tool_name__} {__version__} ({__tool_url__})"
+    print(comment)
     # Get all python files
 
     cwd = os.getcwd()
@@ -137,10 +111,7 @@ def dependentspy(
             if im.is_project:
                 assert im.is_leaf()
                 gr.add_edge(module.route, im.route)
-    # sconn = list(nx.strongly_connected_components(gr))
-    # print(f"{len(sconn)} strongly connected components")
-    # wconn = list(nx.weakly_connected_components(gr))
-    # print(f"{len(wconn)} weakly connected components")
+    
     if prune:
         # Hide modules that have no imports / are not imported
         in_degrees = {module.route: gr.in_degree(module.route) for module in modules}
@@ -162,9 +133,11 @@ def dependentspy(
 
         hide += never_imported + no_imports
 
-    # Determine what modules are displayed as clusters/subgraphs
+    # Determine what modules to render as clusters/subgraphs
     cluster_names = {}
-    cluster_map = {}
+    
+    cluster_map: dict[str, str | None] = {m.route: None for m in modules}  # Maps module routes to the module route representing the containing cluster, or None.
+    
     if use_clusters:
         for module in project_modules if summarize_external else modules:
             if module.is_leaf():
@@ -179,16 +152,13 @@ def dependentspy(
 
         # Link each module to its containing cluster
         for module in modules:
-            cluster_map[module.route] = None
             if not module.is_project and summarize_external:
                 continue
             # Walk up the tree until module has a subgraph
-            m = module
-            while m:
+            for m in module.path_to_root:
                 if m.route in cluster_names:
                     cluster_map[module.route] = m.route
                     break
-                m = m.parent
 
     # Determine what modules to render as nodes
     visible_modules = []
@@ -219,6 +189,7 @@ def dependentspy(
         summarize_external=summarize_external,
         use_clusters=use_clusters,
         use_nested_clusters=use_nested_clusters,
+        comment=comment,
         **kwargs,
     )
 
@@ -245,101 +216,16 @@ def dependentspy(
     return G
 
 
-def create_graphviz(
-    name: str,
-    visible_modules: list[Module],
-    route_map: dict[str, Module],
-    cluster_names: dict[str, str],
-    cluster_map: dict[str, str],
-    render_imports: bool,
-    summarize_external: bool,
-    use_clusters: bool,
-    use_nested_clusters: bool,
-    **kwargs,
-):
-    # Init graphviz graph
-    G = gv.Digraph(name=name, strict=True, **kwargs)
-
-    # Init subgraphs/clusters
-    subgraphs = {}
-    for route, cluster_name in cluster_names.items():
-        module = route_map[route]
-        H = gv.Digraph(name=cluster_name)
-        H.attr(label=module.route)
-        subgraphs[module.route] = H
-
-    def get_containing_graph(module: Module):
-        cluster_route = cluster_map.get(module.route, None)
-        return subgraphs[cluster_route] if cluster_route else G
-
-    # Add node(s) and parent-child edges
-    for module in visible_modules:
-        H = get_containing_graph(module)
-        H.node(
-            module.route,
-            type=module.type,
-            label=module.name,
-            shape="rect",
-            **module_type_node_attrs(module.type),
-        )
-        if (
-            module.parent
-            and not use_nested_clusters
-            and module.parent in visible_modules
-        ):
-            H.edge(
-                module.parent.route,
-                module.route,
-                type="parent",
-                color="black",
-                penwidth="1",
-                arrowtail="ediamond",
-                dir="back",
-            )
-
-    # Add subgraphs to parent graphs
-    for route, H in sorted(subgraphs.items(), key=lambda c: c[0], reverse=True):
-        module = route_map[route]
-        H0 = get_containing_graph(module.parent) if module.parent else G
-        H0.subgraph(H)
-
-    # Add import edges
-    if render_imports:
-        for module in visible_modules:
-            if not isinstance(module, ProjectModule):
-                continue
-            for im in module.imports:
-                # Fallback to root module if configured that way
-                if not im.is_project and summarize_external:
-                    im = im.get_root()
-                # Only add edge if other module is visible
-                if im not in visible_modules:
-                    continue
-                extra = {}
-                if use_clusters and im.route in subgraphs:
-                    extra["lhead"] = subgraphs[im.route].name
-                    # pass
-                G.edge(
-                    module.route,
-                    im.route,
-                    type="import",
-                    color="red",
-                    penwidth="0.5",
-                    **extra,
-                )
-
-    return G
-
-
 if __name__ == "__main__":
     G = dependentspy(
-        "../../ocean/backend",
+        ".",
+        name="dependentspy-test",
         render_imports=True,
-        prune=True,
+        prune=False,
         use_clusters=True,
         use_nested_clusters=True,
         min_cluster_size=1,
-        show_3rdparty=False,
+        show_3rdparty=True,
         show_builtin=False,
         summarize_external=True,
         ignore=["drafts*"],
@@ -348,5 +234,6 @@ if __name__ == "__main__":
         save_dot=True,
         render="if_changed",
         format="png",
+        comment="Test dependency graph of the dependentspy module",
     )
 G.view()

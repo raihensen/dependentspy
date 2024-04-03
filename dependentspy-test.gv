@@ -1,0 +1,21 @@
+// Test dependency graph of the dependentspy module -- Created using dependentspy 0.1.0 (https://github.com/raihensen/dependentspy)
+strict digraph "dependentspy-test" {
+	setup [label=setup fillcolor="#e0e0e0" shape=rect style=filled type=project]
+	graphviz [label=graphviz fillcolor=black fontcolor=white shape=rect style=filled type="3rdparty"]
+	networkx [label=networkx fillcolor=black fontcolor=white shape=rect style=filled type="3rdparty"]
+	subgraph "cluster[dependentspy]" {
+		fillcolor="#f0f0f0" label=dependentspy style=filled
+		"dependentspy.dependentspy" [label=dependentspy fillcolor="#e0e0e0" shape=rect style=filled type=project]
+		"dependentspy.module" [label=module fillcolor="#e0e0e0" shape=rect style=filled type=project]
+		"dependentspy.utils" [label=utils fillcolor="#e0e0e0" shape=rect style=filled type=project]
+		"dependentspy.visualization" [label=visualization fillcolor="#e0e0e0" shape=rect style=filled type=project]
+		"dependentspy.__init__" [label=__init__ fillcolor="#e0e0e0" shape=rect style=filled type=project]
+	}
+	"dependentspy.dependentspy" -> networkx [color="#404040" penwidth=1 type=import]
+	"dependentspy.dependentspy" -> "dependentspy.utils" [color="#404040" penwidth=1 type=import]
+	"dependentspy.dependentspy" -> "dependentspy.visualization" [color="#404040" penwidth=1 type=import]
+	"dependentspy.dependentspy" -> "dependentspy.module" [color="#404040" penwidth=1 type=import]
+	"dependentspy.utils" -> networkx [color="#404040" penwidth=1 type=import]
+	"dependentspy.visualization" -> graphviz [color="#404040" penwidth=1 type=import]
+	"dependentspy.visualization" -> "dependentspy.module" [color="#404040" penwidth=1 type=import]
+}

@@ -1,8 +1,8 @@
 [tool.poetry]
 name = "dependencygraph"
 version = "0.1.0"
-description = ""
-authors = ["rhensen <mail@raimund-hensen.de>"]
+description = "`dependentspy` is another python dependency graph tool, focusing on visualizing project-internal imports."
+authors = ["raihensen"]
 readme = "README.md"
 
 [tool.poetry.dependencies]

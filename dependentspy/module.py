@@ -1,8 +1,12 @@
+from __future__ import annotations
+
 import ast
 from functools import cached_property
+import os
 from pathlib import Path
 import sys
-from typing import Sequence
+from typing import Generator, Iterator, Sequence
+import warnings
 
 
 class Module:
@@ -30,7 +34,7 @@ class Module:
     @cached_property
     def is_builtin(self):
         root = self.path[0]
-        return root in sys.stdlib_module_names or root in sys.builtin_module_names
+        return is_builtin(root)
 
     @property
     def is_3rdparty(self):
@@ -58,10 +62,23 @@ class Module:
     def is_leaf(self):
         return not self.children
 
-    def get_root(self):
+    def get_root(self) -> Module:
         if self.parent is None:
             return self
         return self.parent.get_root()
+    
+    def find_leaf(self) -> Module:
+        """Return any leaf"""
+        if self.is_leaf():
+            return self
+        return self.children[0].find_leaf()
+    
+    @property
+    def path_to_root(self) -> Generator[Module, None, None]:
+        m = self
+        while m:
+            yield m
+            m = m.parent
 
 
 class ProjectModule(Module):
@@ -86,7 +103,51 @@ class ProjectModule(Module):
         if not self.file_path:
             return None
         imports = analyze_imports(self.file_path)
-        return extract_module_names(imports)
+        names = extract_module_names(imports)
+
+        # Handle relative imports
+        routes = []
+        for name in names:
+            first = name.split(".")[0]
+            paths = [self.file_path.parent / f"{first}.py", self.file_path.parent / first]
+            if any(os.path.exists(p) for p in paths):
+                if is_builtin(name):
+                    warnings.warn(f"module '{first}' (imported in {self.route}) is both local and builtin.")
+                routes.append(".".join([*self.path[:-1], name]))
+            else:
+                routes.append(name)
+        return routes
+
+
+def complete_module_tree(modules: Sequence[Module], cls: type[Module]) -> list[Module]:
+    route_map = {m.route: m for m in modules}
+
+    # Complete tree structure
+    inner_modules = []
+    for m in modules:
+        child = m
+        for i in reversed(range(1, len(m.path))):
+            subpath = m.path[:i]
+            subroute = ".".join(subpath)
+            existing = subroute in route_map
+            if existing:
+                parent = route_map[subroute]
+            else:
+                parent = cls(path=subpath)
+                route_map[subroute] = parent
+            parent.children.append(child)
+            child.parent = parent
+            if existing:
+                break
+
+            inner_modules.append(parent)
+            child = parent
+
+    return list(modules) + inner_modules
+
+
+def is_builtin(name: str):
+    return name in sys.stdlib_module_names or name in sys.builtin_module_names
 
 
 def analyze_imports(file_path: Path):

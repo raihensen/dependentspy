@@ -1,6 +1,8 @@
 # `dependentspy`
 
-`dependentspy` is another python dependency graph tool, focussing on visualizing project-internal imports.
+`dependentspy` is another python dependency graph tool, focusing on visualizing project-internal imports.
+
+![Example result for this repository](dependentspy-test.gv.png)
 
 ## Installation
 
