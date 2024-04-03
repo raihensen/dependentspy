@@ -1,7 +1,8 @@
-import graphviz as gv
-import uuid
+import hashlib
 
-from module import Module, ProjectModule
+import graphviz as gv
+
+from dependentspy.module import Module, ProjectModule
 
 
 MODULE_NODE_ATTR_COMMON = dict(
@@ -25,9 +26,23 @@ MODULE_NODE_ATTR = {
     ),
 }
 
+def module_color(module: Module):
+    depth = len(list(module.path_to_root)) - 1
+    root = module.get_root()
+    sha1 = hashlib.sha1(root.name.encode())
+    root_hash = sha1.hexdigest()
+
+    h = int(root_hash[12:14], 16) / 255
+    s = .8
+    # l = .95 - depth * .5 / 5
+    l = 1
+    # return Color(hsl=(h, s, l)).hex
+    return f"{h:.3f},{s:.3f},{l:.3f},.25"
+    # return "#00000020"
+
 CLUSTER_NODE_ATTR = lambda module: dict(
     style="filled",
-    fillcolor="#f0f0f0",
+    fillcolor=module_color(module),
 )
 
 SUBMODULE_EDGE_ATTR = dict(

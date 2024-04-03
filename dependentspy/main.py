@@ -5,9 +5,9 @@ import warnings
 
 import networkx as nx
 
-from utils import PathLike, find_dead_ends
-from visualization import create_graphviz
-from module import Module, ProjectModule, complete_module_tree
+from dependentspy.utils import PathLike, find_dead_ends
+from dependentspy.visualization import create_graphviz
+from dependentspy.module import Module, ProjectModule, complete_module_tree
 
 
 __tool_name__ = "dependentspy"
@@ -33,6 +33,7 @@ def dependentspy(
     ignore: list[str] = [],
     hide: list[str] = [],
     comment: str | None = None,
+    allow_local_imports: bool = True,
     **kwargs,
 ):
     """Main `dependentspy` function, walking the given project directory and creating a dependency graph using graphviz.
@@ -74,12 +75,15 @@ def dependentspy(
         )
 
     # Init module objects
-    project_modules = [ProjectModule.from_file(p) for p in paths]
+    project_modules = [
+        ProjectModule.from_file(p, allow_local_imports=allow_local_imports)
+        for p in paths
+    ]
     project_routes = {m.route for m in project_modules}
 
     # Complete tree structure
     project_modules: list[ProjectModule] = complete_module_tree(
-        project_modules, cls=ProjectModule
+        project_modules, cls=ProjectModule, allow_local_imports=allow_local_imports
     )  # type: ignore
 
     # Collect imported module routes and init objects
@@ -111,7 +115,7 @@ def dependentspy(
             if im.is_project:
                 assert im.is_leaf()
                 gr.add_edge(module.route, im.route)
-    
+
     if prune:
         # Hide modules that have no imports / are not imported
         in_degrees = {module.route: gr.in_degree(module.route) for module in modules}
@@ -135,9 +139,9 @@ def dependentspy(
 
     # Determine what modules to render as clusters/subgraphs
     cluster_names = {}
-    
+
     cluster_map: dict[str, str | None] = {m.route: None for m in modules}  # Maps module routes to the module route representing the containing cluster, or None.
-    
+
     if use_clusters:
         for module in project_modules if summarize_external else modules:
             if module.is_leaf():
@@ -214,26 +218,3 @@ def dependentspy(
         G.render()
 
     return G
-
-
-if __name__ == "__main__":
-    G = dependentspy(
-        ".",
-        name="dependentspy-test",
-        render_imports=True,
-        prune=False,
-        use_clusters=True,
-        use_nested_clusters=True,
-        min_cluster_size=1,
-        show_3rdparty=True,
-        show_builtin=False,
-        summarize_external=True,
-        ignore=["drafts*"],
-        hide=["main", "index"],
-        output_to_project=True,
-        save_dot=True,
-        render="if_changed",
-        format="png",
-        comment="Test dependency graph of the dependentspy module",
-    )
-G.view()

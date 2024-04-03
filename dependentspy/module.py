@@ -5,7 +5,7 @@ from functools import cached_property
 import os
 from pathlib import Path
 import sys
-from typing import Generator, Iterator, Sequence
+from typing import Generator, Sequence
 import warnings
 
 
@@ -87,16 +87,18 @@ class ProjectModule(Module):
         self,
         path: str | Sequence[str],
         file_path: Path | None = None,
+        allow_local_imports: bool = True,
     ):
         super().__init__(path=path)
         self.file_path = file_path
         self.imports: list[Module] = []
+        self.allow_local_imports = allow_local_imports
 
     @staticmethod
-    def from_file(file_path: Path):
+    def from_file(file_path: Path, **kwargs):
         assert file_path.suffix == ".py"
         path = (*file_path.parts[:-1], file_path.stem)
-        return ProjectModule(file_path=file_path, path=path)
+        return ProjectModule(file_path=file_path, path=path, **kwargs)
 
     @cached_property
     def import_routes(self) -> list[str] | None:
@@ -110,7 +112,7 @@ class ProjectModule(Module):
         for name in names:
             first = name.split(".")[0]
             paths = [self.file_path.parent / f"{first}.py", self.file_path.parent / first]
-            if any(os.path.exists(p) for p in paths):
+            if self.allow_local_imports and any(os.path.exists(p) for p in paths):
                 if is_builtin(name):
                     warnings.warn(f"module '{first}' (imported in {self.route}) is both local and builtin.")
                 routes.append(".".join([*self.path[:-1], name]))
@@ -119,7 +121,7 @@ class ProjectModule(Module):
         return routes
 
 
-def complete_module_tree(modules: Sequence[Module], cls: type[Module]) -> list[Module]:
+def complete_module_tree(modules: Sequence[Module], cls: type[Module], **kwargs) -> list[Module]:
     route_map = {m.route: m for m in modules}
 
     # Complete tree structure
@@ -133,7 +135,7 @@ def complete_module_tree(modules: Sequence[Module], cls: type[Module]) -> list[M
             if existing:
                 parent = route_map[subroute]
             else:
-                parent = cls(path=subpath)
+                parent = cls(path=subpath, **kwargs)
                 route_map[subroute] = parent
             parent.children.append(child)
             child.parent = parent
