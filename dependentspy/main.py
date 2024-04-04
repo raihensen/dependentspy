@@ -1,15 +1,14 @@
 import os
+import warnings
 from pathlib import Path
 from typing import Literal
-import warnings
 
 import networkx as nx
 
-from dependentspy.utils import PathLike, find_dead_ends
-from dependentspy.visualization import create_graphviz
 from dependentspy.module import Module, ProjectModule, complete_module_tree
+from dependentspy.utils import PathLike, find_dead_ends
 from dependentspy.version import __version__
-
+from dependentspy.visualization import create_graphviz
 
 __tool_name__ = "dependentspy"
 __tool_url__ = "https://github.com/raihensen/dependentspy"
@@ -61,7 +60,9 @@ def dependentspy(
 
     # Process parameters
     use_nested_clusters = use_clusters and use_nested_clusters
-    comment = ((comment + " -- ") if comment else "") + f"Created using {__tool_name__} {__version__} ({__tool_url__})"
+    comment = (
+        (comment + " -- ") if comment else ""
+    ) + f"Created using {__tool_name__} {__version__} ({__tool_url__})"
     print(comment)
     # Get all python files
 
@@ -85,6 +86,7 @@ def dependentspy(
     project_modules: list[ProjectModule] = complete_module_tree(
         project_modules, cls=ProjectModule, allow_local_imports=allow_local_imports
     )  # type: ignore
+    project_modules.sort(key=lambda module: module.route)
 
     # Collect imported module routes and init objects
     import_routes = sorted(
@@ -92,13 +94,16 @@ def dependentspy(
     )
     external_modules = [Module(r) for r in import_routes if r not in project_routes]
     external_modules = complete_module_tree(external_modules, cls=Module)
+    external_modules.sort(key=lambda module: module.route)
 
     modules = project_modules + external_modules
 
     # Add import relations
     route_map = {module.route: module for module in modules}
     for module in project_modules:
-        module.imports = [route_map[route] for route in module.import_routes or []]
+        module.imports = [
+            route_map[route] for route in sorted(module.import_routes or [])
+        ]
 
     # print("\n".join([str(m) for m in sorted(project_modules, key=str)]))
     for t in ["project", "builtin", "3rdparty"]:
@@ -140,7 +145,9 @@ def dependentspy(
     # Determine what modules to render as clusters/subgraphs
     cluster_names = {}
 
-    cluster_map: dict[str, str | None] = {m.route: None for m in modules}  # Maps module routes to the module route representing the containing cluster, or None.
+    cluster_map: dict[str, str | None] = {
+        m.route: None for m in modules
+    }  # Maps module routes to the module route representing the containing cluster, or None.
 
     if use_clusters:
         for module in project_modules if summarize_external else modules:
